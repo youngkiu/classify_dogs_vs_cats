@@ -4,20 +4,23 @@ import os
 import keras
 import matplotlib.pyplot as plt
 import numpy as np
+from keras.models import load_model
+from keras.preprocessing import image
 from PIL import Image
 from sklearn.metrics import (accuracy_score, f1_score, precision_recall_curve,
                              precision_score, recall_score, roc_auc_score,
                              roc_curve)
+from tqdm import tqdm
 
 # TEST_DATASET_DIR_PATH = '/home/youngkiu/dataset/dogs-vs-cats/test1/'
 TEST_DATASET_DIR_PATH = '/home/youngkiu/dataset/dataset_dogs_vs_cats/test/'
 INPUT_SHAPE = (200, 200)
-BATCH_SIZE = 1
+BATCH_SIZE = 64
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 
-checkpoint_dir = '/home/youngkiu/src/tf.keras/dogs_vs_cats/logs/20200113-172726'
+checkpoint_dir = '/home/youngkiu/src/tf.keras/dogs_vs_cats/logs/20200113-224554'
 
 hdf5_file_list = glob.glob('%s/*.hdf5' % checkpoint_dir)
 latest_hdf5_file = max(hdf5_file_list, key=os.path.getctime)
@@ -31,24 +34,46 @@ test_datagen = keras.preprocessing.image.ImageDataGenerator(
     rescale=1./255.
 )
 
+# https://groups.google.com/forum/#!topic/keras-users/bqWwFox_zZs
 test_generator = test_datagen.flow_from_directory(
     TEST_DATASET_DIR_PATH,
     batch_size=BATCH_SIZE,
     class_mode='binary',
-    target_size=INPUT_SHAPE
+    target_size=INPUT_SHAPE,
+    shuffle=False,
 )
+
+for image_file, gt in zip(test_generator.filenames, test_generator.classes):
+    if image_file[:3] == 'cat':
+        assert gt == 0
+    elif image_file[:3] == 'dog':
+        assert gt == 1
+    else:
+        assert False
+
 
 loss, accuracy = model.evaluate_generator(
     test_generator, steps=len(test_generator), verbose=1)
 print('Restored model, accuracy: {:5.2f}%'.format(100*accuracy))
 
+y_gt_classes = test_generator.classes
+
 predictions = model.predict_generator(
     test_generator, steps=len(test_generator), verbose=1)
 
-y_gt_classes = test_generator.classes
-
 y_pred_proba = predictions.flatten()
-y_pred_classes = y_pred_proba > 0.5
+y_pred_classes = (y_pred_proba > 0.5).astype(int)
+
+# prediction_list = []
+for image_file, gt, proba in tqdm(zip(test_generator.filenames, test_generator.classes, y_pred_proba)):
+    image_file_path = os.path.join(TEST_DATASET_DIR_PATH, image_file)
+    img = image.load_img(image_file_path, target_size=INPUT_SHAPE)
+    x = image.img_to_array(img)
+    x = x / 255
+    x = np.expand_dims(x, axis=0)
+
+    pred = model.predict(x)[0]
+    assert abs(proba - pred[0]) < 0.001
 
 
 # https://machinelearningmastery.com/how-to-calculate-precision-recall-f1-and-more-for-deep-learning-models/
@@ -83,8 +108,8 @@ axes[1].plot([0, 1], [0, 1], linestyle='--')
 axes[1].set_title('ROC curve')
 plt.show()
 
-for i, (image_file, gt, proba) in enumerate(zip(test_generator.filenames, y_gt_classes, y_pred_proba)):
-    if abs(gt - proba) > 0.5:
+for i, (image_file, gt, proba) in enumerate(zip(test_generator.filenames, test_generator.classes, y_pred_proba)):
+    if abs(gt - proba) > 0.25:
         print('%d - %s : %f' % (i, image_file, proba))
         image_file_path = os.path.join(TEST_DATASET_DIR_PATH, image_file)
         image = np.array(Image.open(image_file_path))
